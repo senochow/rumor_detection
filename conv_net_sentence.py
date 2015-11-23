@@ -47,10 +47,12 @@ def train_conv_net(datasets,
                    sqr_norm_lim=9,
                    non_static=True):
     """
+    datasets: 0 for tarin, 1 for test
+    U: wordvec
     Train a simple conv net
     img_h = sentence length (padded where necessary)
     img_w = word vector length (300 for word2vec)
-    filter_hs = filter window sizes    
+    filter_hs = filter window sizes , 每一个filter 对于100个 feature map   
     hidden_units = [x,y] x is the number of feature maps (per filter window), and y is the penultimate layer
     sqr_norm_lim = s^2 in the paper
     lr_decay = adadelta decay parameter
@@ -76,6 +78,7 @@ def train_conv_net(datasets,
     x = T.matrix('x')   
     y = T.ivector('y')
     Words = theano.shared(value = U, name = "Words")
+    # ??? set zero
     zero_vec_tensor = T.vector()
     zero_vec = np.zeros(img_w)
     set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))], allow_input_downcast=True)
@@ -106,7 +109,7 @@ def train_conv_net(datasets,
     grad_updates = sgd_updates_adadelta(params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
     
     #shuffle dataset and assign to mini batches. if dataset size is not a multiple of mini batches, replicate 
-    #extra data (at random)
+    #extra data (at random), 每次只取0.9倍的数据进行train， shuffle，另外的validation
     np.random.seed(3435)
     if datasets[0].shape[0] % batch_size > 0:
         extra_data_num = batch_size - datasets[0].shape[0] % batch_size
