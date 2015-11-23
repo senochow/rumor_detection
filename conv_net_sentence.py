@@ -62,6 +62,7 @@ def train_conv_net(datasets,
     filter_shapes = []
     pool_sizes = []
     for filter_h in filter_hs:
+        # filter: conv shape, hidden layer: 就是最后的全连接层
         filter_shapes.append((feature_maps, 1, filter_h, filter_w))
         pool_sizes.append((img_h-filter_h+1, img_w-filter_w+1))
     parameters = [("image shape",img_h,img_w),("filter shape",filter_shapes), ("hidden_units",hidden_units),
