@@ -1,3 +1,4 @@
+#! -*- coding:utf8 -*-
 """
 Sample code for
 Convolutional Neural Networks for Sentence Classification
@@ -16,6 +17,7 @@ import theano.tensor as T
 import re
 import warnings
 import sys
+import time
 warnings.filterwarnings("ignore")   
 
 #different non-linearities
@@ -39,7 +41,7 @@ def train_conv_net(datasets,
                    hidden_units=[100,2], 
                    dropout_rate=[0.5],
                    shuffle_batch=True,
-                   n_epochs=25, 
+                   n_epochs=5, 
                    batch_size=50, 
                    lr_decay = 0.95,
                    conv_non_linear="relu",
@@ -162,6 +164,7 @@ def train_conv_net(datasets,
     test_perf = 0       
     cost_epoch = 0    
     while (epoch < n_epochs):        
+        start_time = time.time()
         epoch = epoch + 1
         if shuffle_batch:
             for minibatch_index in np.random.permutation(range(n_train_batches)):
@@ -174,12 +177,13 @@ def train_conv_net(datasets,
         train_losses = [test_model(i) for i in xrange(n_train_batches)]
         train_perf = 1 - np.mean(train_losses)
         val_losses = [val_model(i) for i in xrange(n_val_batches)]
-        val_perf = 1- np.mean(val_losses)                        
-        print('epoch %i, train perf %f %%, val perf %f' % (epoch, train_perf * 100., val_perf*100.))
+        val_perf = 1- np.mean(val_losses)                   
+        print('epoch: %i, training time: %.2f secs, train perf: %.2f %%, val perf: %.2f %%' % (epoch, time.time()-start_time, train_perf * 100., val_perf*100.))
         if val_perf >= best_val_perf:
             best_val_perf = val_perf
             test_loss = test_model_all(test_set_x,test_set_y)        
-            test_perf = 1- test_loss         
+            test_perf = 1- test_loss       
+      
     return test_perf
 
 def shared_dataset(data_xy, borrow=True):
@@ -280,16 +284,20 @@ def make_idx_data_cv(revs, word_idx_map, cv, max_l=51, k=300, filter_h=5):
             train.append(sent)   
     train = np.array(train,dtype="int")
     test = np.array(test,dtype="int")
+    print 'traing set :\t', len(train)
+    print 'testing set :\t', len(test)
     return [train, test]     
   
    
 if __name__=="__main__":
     print "loading data...",
-    x = cPickle.load(open("mr.p","rb"))
-    revs, W, W2, word_idx_map, vocab = x[0], x[1], x[2], x[3], x[4]
-    print "data loaded!"
     mode= sys.argv[1]
     word_vectors = sys.argv[2]    
+    cv = int(sys.argv[3])
+    x = cPickle.load(open("mr.p"+str(cv),"rb"))
+    revs, W, W2, word_idx_map, vocab = x[0], x[1], x[2], x[3], x[4]
+    print "data loaded!"
+
     if mode=="-nonstatic":
         print "model architecture: CNN-non-static"
         non_static=True
@@ -304,21 +312,24 @@ if __name__=="__main__":
         print "using: word2vec vectors"
         U = W
     results = []
-    r = range(0,10)    
+    r = range(0,cv)    
+    start_time = time.time()
     for i in r:
-        datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=56,k=300, filter_h=5)
+        datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=126,k=300, filter_h=5)
         perf = train_conv_net(datasets,
                               U,
                               lr_decay=0.95,
+                              #filter_hs=[7,8,9],
                               filter_hs=[3,4,5],
                               conv_non_linear="relu",
                               hidden_units=[100,2], 
                               shuffle_batch=True, 
-                              n_epochs=25, 
+                              n_epochs=5, 
                               sqr_norm_lim=9,
                               non_static=non_static,
                               batch_size=50,
                               dropout_rate=[0.5])
         print "cv: " + str(i) + ", perf: " + str(perf)
         results.append(perf)  
+    print 'total time : %.2f minutes' % ((time.time()-start_time)/60)
     print str(np.mean(results))
