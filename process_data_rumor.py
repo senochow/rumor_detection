@@ -28,10 +28,13 @@ def load_json_file(filename, vocab, label, fold_map):
             weibos = d['weibos']
             for weibo in weibos:
                 content = weibo['content']#.encode("utf8")
-                words = jieba.cut(content)
+                #words = jieba.cut(content)
+                #words = weibo['words'].split(" ")
+                #print words
                 # words str, connect by space
-                ori_rev = ' '.join(words)
+                ori_rev = weibo['words']
                 cnt = 0
+                #for word in ori_rev.split():
                 for word in ori_rev.split():
                     cnt += 1
                     vocab[word] += 1
@@ -80,7 +83,7 @@ def load_txt_vec(filename, vocab):
         line = f.readline()
         if not line:
             break
-        line = line.rstrip().decode("utf8")
+        line = line.rstrip().decode("utf8", 'ignore')
         word, fea = line.split(' ', 1)
         if word in vocab:
             #print word
@@ -153,7 +156,8 @@ if __name__=="__main__":
     w2v_file = sys.argv[1]     
     pkfile = sys.argv[2]
     nfold = int(sys.argv[3])
-    data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
+    #data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
+    data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
     print "loading data...",        
     revs, vocab = build_data_cv(data_folder, cv=nfold, clean_string=True)
     max_l = np.max(pd.DataFrame(revs)["num_words"])

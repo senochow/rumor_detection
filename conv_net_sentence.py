@@ -34,6 +34,37 @@ def Iden(x):
     y = x
     return(y)
        
+def cal_f1(pred, label):
+    pos_ac, neg_ac = 0, 0
+    pos_pred_num, neg_pred_num = 0, 0
+    pos_num, neg_num = 0, 0
+    for i in range(len(pred)):
+        if pred[i] == 1:
+            pos_pred_num += 1
+        else:
+            neg_pred_num += 1
+        if label[i] == 1:
+            pos_num += 1
+            if label[i] == pred[i]:
+                pos_ac += 1
+        else:
+            neg_num += 1
+            if label[i] == pred[i]:
+                neg_ac += 1
+    pos_prec = float(pos_ac)/pos_pred_num
+    neg_prec = float(neg_ac)/neg_pred_num
+
+    pos_recall = float(pos_ac)/pos_num
+    neg_recall = float(neg_ac)/neg_num
+
+    print 'instance count : pos:' + str(pos_num) + '\t neg:' + str(neg_num)
+    print 'hit count : pos:'+str(pos_ac) + '\t neg:' + str(neg_ac)
+    print 'pos: precision: ' + str(pos_prec) + '\t recall:' + str(pos_recall)
+    print 'neg: precision: ' + str(neg_prec) + '\t recall:' + str(neg_recall)
+    sys.stdout.flush()
+    #return float(pos_ac)/pos_num, float(neg_ac)/neg_num
+        
+
 def train_conv_net(datasets,
                    U,
                    img_w=300, 
@@ -155,7 +186,9 @@ def train_conv_net(datasets,
     test_y_pred = classifier.predict(test_layer1_input)
     test_error = T.mean(T.neq(test_y_pred, y))
     test_model_all = theano.function([x,y], test_error, allow_input_downcast=True)   
-    
+    #test_f1_value = get_f1_value(test_y_pred, y)
+    test_model_f1 = theano.function([x], test_y_pred, allow_input_downcast=True)  
+    test_layer1_feature = theano.function([x], test_layer1_input, allow_input_downcast=True)
     #start training over mini-batches
     print '... training'
     epoch = 0
@@ -163,6 +196,7 @@ def train_conv_net(datasets,
     val_perf = 0
     test_perf = 0       
     cost_epoch = 0    
+    fp = 0
     while (epoch < n_epochs):        
         start_time = time.time()
         epoch = epoch + 1
@@ -179,12 +213,24 @@ def train_conv_net(datasets,
         val_losses = [val_model(i) for i in xrange(n_val_batches)]
         val_perf = 1- np.mean(val_losses)                   
         print('epoch: %i, training time: %.2f secs, train perf: %.2f %%, val perf: %.2f %%' % (epoch, time.time()-start_time, train_perf * 100., val_perf*100.))
+        tmp_pred_y = test_model_f1(test_set_x)
+        #tmp_feature = test_layer1_feature(test_set_x)
+        #cal_f1(tmp_pred_y, test_set_y)
+        if epoch == n_epochs:
+            test_loss = test_model_all(test_set_x,test_set_y)
+            fp = 1- test_loss
+            print 'last : ', fp
+            cal_f1(tmp_pred_y, test_set_y)
+            #if tmp_perf > test_perf:
+            #for i in range(len(tmp_pred_y)):
+            #    print '%d %d %s' % (test_set_y[i], tmp_pred_y[i], ' '.join([str(val) for val in tmp_feature[i]]))
+        
         if val_perf >= best_val_perf:
             best_val_perf = val_perf
             test_loss = test_model_all(test_set_x,test_set_y)        
             test_perf = 1- test_loss       
-      
-    return test_perf
+        
+    return test_perf, fp
 
 def shared_dataset(data_xy, borrow=True):
         """ Function that loads the dataset into shared variables
@@ -256,7 +302,7 @@ def safe_update(dict_to, dict_from):
     
 def get_idx_from_sent(sent, word_idx_map, max_l=51, k=300, filter_h=5):
     """
-    Transforms sentence into a list of indices. Pad with zeroes.
+    Transforms sentence into a list of indices. Pad with zeroes, (lastword+pad=filter_h).
     """
     x = []
     pad = filter_h - 1
@@ -277,13 +323,20 @@ def make_idx_data_cv(revs, word_idx_map, cv, max_l=51, k=300, filter_h=5):
     train, test = [], []
     for rev in revs:
         sent = get_idx_from_sent(rev["text"], word_idx_map, max_l, k, filter_h)   
+        # if the sententce if larger than max_l, then use the (0, max_l)
+        if len(sent) > max_l:
+            sent = sent[:max_l]
         sent.append(rev["y"])
         if rev["split"]==cv:            
             test.append(sent)        
         else:  
             train.append(sent)   
+    #try:
     train = np.array(train,dtype="int")
     test = np.array(test,dtype="int")
+    #except ValueError:
+    #    print train
+    #    return
     print 'traing set :\t', len(train)
     print 'testing set :\t', len(test)
     return [train, test]     
@@ -312,11 +365,13 @@ if __name__=="__main__":
         print "using: word2vec vectors"
         U = W
     results = []
+    fres = []
     r = range(0,cv)    
     start_time = time.time()
     for i in r:
-        datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=126,k=300, filter_h=5)
-        perf = train_conv_net(datasets,
+        datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
+        #datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
+        perf, fp = train_conv_net(datasets,
                               U,
                               lr_decay=0.95,
                               #filter_hs=[7,8,9],
@@ -331,5 +386,8 @@ if __name__=="__main__":
                               dropout_rate=[0.5])
         print "cv: " + str(i) + ", perf: " + str(perf)
         results.append(perf)  
+        fres.append(fp)
+        #break
     print 'total time : %.2f minutes' % ((time.time()-start_time)/60)
     print str(np.mean(results))
+    print str(np.mean(fres))
