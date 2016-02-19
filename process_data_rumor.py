@@ -26,6 +26,11 @@ def load_json_file(filename, vocab, label, fold_map):
         for line in f:
             d = json.loads(line.rstrip())   
             weibos = d['weibos']
+            e_name = d['event_name'].encode('utf8', 'ignore')
+            #if label == 1:
+            #    print str(num) + '\t' + e_name
+            #else:
+            #    print str(num+100) + '\t' + e_name
             for weibo in weibos:
                 content = weibo['content']#.encode("utf8")
                 #words = jieba.cut(content)
@@ -38,7 +43,10 @@ def load_json_file(filename, vocab, label, fold_map):
                 for word in ori_rev.split():
                     cnt += 1
                     vocab[word] += 1
-                datum = {"y":label, "text": ori_rev, "num_words": cnt, "split": fold_map[num]}
+                event_index = num
+                if label == 0:
+                    event_index += 100
+                datum = {"y":label, "text": ori_rev, "num_words": cnt, "split": fold_map[num], "event_id":event_index}
                 revs.append(datum)
             num += 1
     return revs
@@ -160,6 +168,7 @@ if __name__=="__main__":
     data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
     print "loading data...",        
     revs, vocab = build_data_cv(data_folder, cv=nfold, clean_string=True)
+    #'''
     max_l = np.max(pd.DataFrame(revs)["num_words"])
     mean_l = np.mean(pd.DataFrame(revs)["num_words"])
     min_l = np.min(pd.DataFrame(revs)["num_words"])

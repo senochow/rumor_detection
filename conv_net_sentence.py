@@ -63,9 +63,86 @@ def cal_f1(pred, label):
     print 'neg: precision: ' + str(neg_prec) + '\t recall:' + str(neg_recall)
     sys.stdout.flush()
     #return float(pos_ac)/pos_num, float(neg_ac)/neg_num
+
+def cal_event_prob(test_set_y, tmp_pred_prob, test_event_id):
+    print 'cal event probability...'
+    event_pred_list = {}
+    event_label = {}
+    for i in range(len(test_set_y)):
+        index = test_event_id[i]
+        event_pred_list.setdefault(index,[])
+        event_pred_list[index].append(tmp_pred_prob[i][1])
+        event_label[index] = test_set_y[i]
+    event_pred = {}
+    for index, preds in event_pred_list.items():
+        pred_val = np.mean(preds)
+        event_pred[index] = pred_val
+    event_pred_label = {}
+    for index, pred_val in event_pred.items():
+        if pred_val > 0.5:
+            event_pred_label[index] = 1
+        else:
+            event_pred_label[index] = 0
+    print 'each event probability..'
+    print event_pred
+    avg_prec = cal_measure_info(event_label, event_pred_label)
+    return avg_prec
         
+def cal_event_mersure(test_set_y, tmp_pred_y, test_event_id):
+    m_pred = {}
+    event_label = {}
+    for i in range(len(test_set_y)):
+        index = test_event_id[i]
+        m_pred.setdefault(index, [0,0])
+        event_label[index] = test_set_y[i]
+        m_pred[index][tmp_pred_y[i]] += 1
+    # cal 
+    print 'each event pred...'
+    print m_pred
+    event_pred = {}
+    for index, preds in m_pred.items():
+        if preds[0] > preds[1]:
+            event_pred[index] = 0
+        else:
+            event_pred[index] = 1
+    avg_prec = cal_measure_info(event_label, event_pred)
+    return avg_prec
+
+def cal_measure_info(event_label, event_pred):
+    p_hit ,n_hit = 0, 0
+    p_pred_num, n_pred_num = 0, 0
+    p_num , n_num = 0, 0
+    avg_prec = 0
+    for index, label in event_label.items():
+        pred_label = event_pred[index]
+        if label == pred_label:
+            avg_prec += 1
+        if label == 1:
+            p_num += 1
+            if label == pred_label:
+                p_hit += 1
+                p_pred_num += 1
+            else:
+                n_pred_num += 1
+        else:
+            n_num += 1
+            if label == pred_label:
+                n_hit += 1
+                n_pred_num += 1
+            else:
+                p_pred_num += 1
+    avg_prec = 1.0*avg_prec/len(event_label)
+    print 'hit count pos:%d, neg:%d'%(p_hit, n_hit)
+    print 'precision : pos: %f, neg: %f' % (1.0*p_hit/p_pred_num, 1.0*n_hit/n_pred_num)
+    print 'recall : pos: %f, neg: %f' % (1.0*p_hit/p_num, 1.0*n_hit/n_num)
+    print 'average accuracy : %f'% (avg_prec)
+    sys.stdout.flush() 
+    return avg_prec
+
+
 
 def train_conv_net(datasets,
+                   test_event_id,
                    U,
                    img_w=300, 
                    filter_hs=[3,4,5],
@@ -81,9 +158,9 @@ def train_conv_net(datasets,
                    non_static=True):
     """
     datasets: 0 for tarin, 1 for test
-    U: wordvec
+    U: wordvec : {word_index: vector feature}
     Train a simple conv net
-    img_h = sentence length (padded where necessary)
+    img_h = sentence length (padded where necessary), 固定的长度：equal to max sentence length in dataset(pre computed)
     img_w = word vector length (300 for word2vec)
     filter_hs = filter window sizes , 每一个filter 对于100个 feature map   
     hidden_units = [x,y] x is the number of feature maps (per filter window), and y is the penultimate layer
@@ -118,6 +195,7 @@ def train_conv_net(datasets,
     layer0_input = Words[T.cast(x.flatten(),dtype="int32")].reshape((x.shape[0],1,x.shape[1],Words.shape[1]))                                  
     conv_layers = []
     layer1_inputs = []
+    # each filter has its own conv layer: the full conv layers = concatenate all layer to 1 
     for i in xrange(len(filter_hs)):
         filter_shape = filter_shapes[i]
         pool_size = pool_sizes[i]
@@ -175,7 +253,7 @@ def train_conv_net(datasets,
     train_model = theano.function([index], cost, updates=grad_updates,
           givens={
             x: train_set_x[index*batch_size:(index+1)*batch_size],
-            y: train_set_y[index*batch_size:(index+1)*batch_size]}, allow_input_downcast=True)     
+            y: train_set_y[index*batch_size:(index+1)*batch_size]}, allow_input_downcast=True) 
     test_pred_layers = []
     test_size = test_set_x.shape[0]
     test_layer0_input = Words[T.cast(x.flatten(),dtype="int32")].reshape((test_size,1,img_h,Words.shape[1]))
@@ -184,10 +262,12 @@ def train_conv_net(datasets,
         test_pred_layers.append(test_layer0_output.flatten(2))
     test_layer1_input = T.concatenate(test_pred_layers, 1)
     test_y_pred = classifier.predict(test_layer1_input)
+    test_y_pred_p = classifier.predict_p(test_layer1_input)
     test_error = T.mean(T.neq(test_y_pred, y))
     test_model_all = theano.function([x,y], test_error, allow_input_downcast=True)   
     #test_f1_value = get_f1_value(test_y_pred, y)
     test_model_f1 = theano.function([x], test_y_pred, allow_input_downcast=True)  
+    test_model_prob = theano.function([x], test_y_pred_p, allow_input_downcast=True)  
     test_layer1_feature = theano.function([x], test_layer1_input, allow_input_downcast=True)
     #start training over mini-batches
     print '... training'
@@ -197,6 +277,7 @@ def train_conv_net(datasets,
     test_perf = 0       
     cost_epoch = 0    
     fp = 0
+    avg_precsion = 0
     while (epoch < n_epochs):        
         start_time = time.time()
         epoch = epoch + 1
@@ -213,24 +294,29 @@ def train_conv_net(datasets,
         val_losses = [val_model(i) for i in xrange(n_val_batches)]
         val_perf = 1- np.mean(val_losses)                   
         print('epoch: %i, training time: %.2f secs, train perf: %.2f %%, val perf: %.2f %%' % (epoch, time.time()-start_time, train_perf * 100., val_perf*100.))
-        tmp_pred_y = test_model_f1(test_set_x)
+        #tmp_pred_prob = test_model_prob(test_set_x)
+        #cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
         #tmp_feature = test_layer1_feature(test_set_x)
         #cal_f1(tmp_pred_y, test_set_y)
         if epoch == n_epochs:
+            tmp_pred_y = test_model_f1(test_set_x)
+            tmp_pred_prob = test_model_prob(test_set_x)
             test_loss = test_model_all(test_set_x,test_set_y)
             fp = 1- test_loss
             print 'last : ', fp
-            cal_f1(tmp_pred_y, test_set_y)
+            #cal_f1(tmp_pred_y, test_set_y)
             #if tmp_perf > test_perf:
+            avg_precsion1 = cal_event_mersure(test_set_y, tmp_pred_y, test_event_id)
+            avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
             #for i in range(len(tmp_pred_y)):
-            #    print '%d %d %s' % (test_set_y[i], tmp_pred_y[i], ' '.join([str(val) for val in tmp_feature[i]]))
+            #    print '%d %d %d %s' % (test_set_y[i], tmp_pred_y[i], test_event_id[i], ' '.join([str(val) for val in tmp_feature[i]]))
         
         if val_perf >= best_val_perf:
             best_val_perf = val_perf
             test_loss = test_model_all(test_set_x,test_set_y)        
             test_perf = 1- test_loss       
         
-    return test_perf, fp
+    return test_perf, fp, avg_precsion
 
 def shared_dataset(data_xy, borrow=True):
         """ Function that loads the dataset into shared variables
@@ -303,6 +389,7 @@ def safe_update(dict_to, dict_from):
 def get_idx_from_sent(sent, word_idx_map, max_l=51, k=300, filter_h=5):
     """
     Transforms sentence into a list of indices. Pad with zeroes, (lastword+pad=filter_h).
+        sent = pad + sentence + pad , pad = filter_h-1
     """
     x = []
     pad = filter_h - 1
@@ -321,25 +408,23 @@ def make_idx_data_cv(revs, word_idx_map, cv, max_l=51, k=300, filter_h=5):
     Transforms sentences into a 2-d matrix.
     """
     train, test = [], []
+    test_event_id = []
     for rev in revs:
         sent = get_idx_from_sent(rev["text"], word_idx_map, max_l, k, filter_h)   
         # if the sententce if larger than max_l, then use the (0, max_l)
-        if len(sent) > max_l:
-            sent = sent[:max_l]
+        #if len(sent) > max_l:
+        #    sent = sent[:max_l]
         sent.append(rev["y"])
         if rev["split"]==cv:            
-            test.append(sent)        
+            test.append(sent)
+            test_event_id.append(rev["event_id"])
         else:  
             train.append(sent)   
-    #try:
     train = np.array(train,dtype="int")
     test = np.array(test,dtype="int")
-    #except ValueError:
-    #    print train
-    #    return
     print 'traing set :\t', len(train)
     print 'testing set :\t', len(test)
-    return [train, test]     
+    return [train, test], test_event_id
   
    
 if __name__=="__main__":
@@ -366,12 +451,14 @@ if __name__=="__main__":
         U = W
     results = []
     fres = []
+    avg_plist = []
     r = range(0,cv)    
     start_time = time.time()
     for i in r:
-        datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
-        #datasets = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
-        perf, fp = train_conv_net(datasets,
+        datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
+        #datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
+        perf, fp, avg_precsion = train_conv_net(datasets,
+                              test_event_id,
                               U,
                               lr_decay=0.95,
                               #filter_hs=[7,8,9],
@@ -387,7 +474,9 @@ if __name__=="__main__":
         print "cv: " + str(i) + ", perf: " + str(perf)
         results.append(perf)  
         fres.append(fp)
+        avg_plist.append(avg_precsion)
         #break
     print 'total time : %.2f minutes' % ((time.time()-start_time)/60)
     print str(np.mean(results))
     print str(np.mean(fres))
+    print 'all avg precision : prec: %f' % (np.mean(avg_plist))
