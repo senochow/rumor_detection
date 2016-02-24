@@ -19,8 +19,19 @@ def gen_kfold(nums, cv):
     print index
     return fold_map
 
-def load_json_file(filename, vocab, label, fold_map):
+def load_extra_fea(filename):
+    id_feature = {}
+    with open(filename) as f:
+        for line in f:
+            mid, label, fea = line.rstrip().split("\t")
+            id_feature[mid] = fea
+    return id_feature
+
+def load_json_file(filename, extra_fea_file, vocab, label, fold_map):
     revs = []
+    id_extra_fea = load_extra_fea(extra_fea_file)
+    print len(id_extra_fea)
+    fea_cnt = 0
     with open(filename) as f:
         num = 0
         for line in f:
@@ -38,6 +49,11 @@ def load_json_file(filename, vocab, label, fold_map):
                 #print words
                 # words str, connect by space
                 ori_rev = weibo['words']
+                mid = weibo['mid'].encode('utf8', 'ignore')
+                if mid not in id_extra_fea:
+                    fea_cnt += 1
+                    continue
+                extra_fea = id_extra_fea[mid]
                 cnt = 0
                 #for word in ori_rev.split():
                 for word in ori_rev.split():
@@ -46,12 +62,13 @@ def load_json_file(filename, vocab, label, fold_map):
                 event_index = num
                 if label == 0:
                     event_index += 100
-                datum = {"y":label, "text": ori_rev, "num_words": cnt, "split": fold_map[num], "event_id":event_index}
+                datum = {"y":label, "mid":mid ,"text": ori_rev, "extra_fea":extra_fea, "num_words": cnt, "split": fold_map[num], "event_id":event_index}
                 revs.append(datum)
             num += 1
+    print fea_cnt
     return revs
 
-def build_data_cv(data_folder, cv=10, clean_string=True):
+def build_data_cv(data_folder, extra_fea_folder, cv=10, clean_string=True):
     """
     Loads data and split into 5 folds.
     """
@@ -60,8 +77,8 @@ def build_data_cv(data_folder, cv=10, clean_string=True):
     pos_file = data_folder[0]
     neg_file = data_folder[1]
     vocab = defaultdict(float)
-    rumor_datas = load_json_file(pos_file, vocab, 1, fold_map)
-    normal_datas = load_json_file(neg_file, vocab, 0, fold_map)
+    rumor_datas = load_json_file(pos_file, extra_fea_folder[0], vocab, 1, fold_map)
+    normal_datas = load_json_file(neg_file, extra_fea_folder[1], vocab, 0, fold_map)
     revs = rumor_datas + normal_datas
     return revs, vocab
     
@@ -166,8 +183,9 @@ if __name__=="__main__":
     nfold = int(sys.argv[3])
     #data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
     data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
+    extra_fea_folder = ["data/weibo_static_feature/rumor.feature", "data/weibo_static_feature/normal.feature"]
     print "loading data...",        
-    revs, vocab = build_data_cv(data_folder, cv=nfold, clean_string=True)
+    revs, vocab = build_data_cv(data_folder, extra_fea_folder, cv=nfold, clean_string=True)
     #'''
     max_l = np.max(pd.DataFrame(revs)["num_words"])
     mean_l = np.mean(pd.DataFrame(revs)["num_words"])
