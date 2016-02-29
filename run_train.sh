@@ -17,8 +17,9 @@ w2v_file=${dirname}'weibo_filter_5kw_300.vector'
 #w2v_file=${dirname}'xinhua_sent_filter_300.vector'
 cv=5
 pkfile='mr.p'$cv
-python process_data_rumor.py $w2v_file $pkfile $cv
+#python process_data_rumor.py $w2v_file $pkfile $cv
 #python process_data_17.py $w2v_file $pkfile $cv
 
-python conv_net_sentence.py -nonstatic -word2vec $cv
-#python conv_net_sentence.py -static -word2vec $cv
+#python conv_net_sentence.py -nonstatic -word2vec $cv
+python conv_net_sentence.py -static -word2vec $cv
+#python conv_net_sentence_ori.py -static -word2vec $cv

@@ -23,7 +23,8 @@ def load_extra_fea(filename):
     id_feature = {}
     with open(filename) as f:
         for line in f:
-            mid, label, fea = line.rstrip().split("\t")
+            #mid, label, fea = line.rstrip().split("\t")
+            eid, mid, label, fea = line.rstrip().split("\t")
             id_feature[mid] = fea
     return id_feature
 
@@ -183,7 +184,8 @@ if __name__=="__main__":
     nfold = int(sys.argv[3])
     #data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
     data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
-    extra_fea_folder = ["data/weibo_static_feature/rumor.feature", "data/weibo_static_feature/normal.feature"]
+    #extra_fea_folder = ["data/weibo_static_feature/rumor.feature", "data/weibo_static_feature/normal.feature"]
+    extra_fea_folder = ["data/weibo_static_feature/event_rumor.feature", "data/weibo_static_feature/event_normal.feature"]
     print "loading data...",        
     revs, vocab = build_data_cv(data_folder, extra_fea_folder, cv=nfold, clean_string=True)
     #'''

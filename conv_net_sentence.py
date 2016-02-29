@@ -143,6 +143,8 @@ def cal_measure_info(event_label, event_pred):
 
 def train_conv_net(datasets,
                    test_event_id,
+                   test_mid,
+                   cv,
                    U,
                    img_w=300, 
                    filter_hs=[3,4,5],
@@ -155,7 +157,7 @@ def train_conv_net(datasets,
                    conv_non_linear="relu",
                    activations=[Iden],
                    sqr_norm_lim=9,
-                   extra_fea_len=29,
+                   extra_fea_len=6,
                    non_static=True):
     """
     datasets: 0 for tarin, 1 for test
@@ -208,9 +210,9 @@ def train_conv_net(datasets,
         layer1_input = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
         layer1_inputs.append(layer1_input)
-    #layer1_inputs.append(layer1_input_extra_fea)
+    layer1_inputs.append(layer1_input_extra_fea)
     layer1_input = T.concatenate(layer1_inputs,1)
-    hidden_units[0] = feature_maps*len(filter_hs) #+ extra_fea_len 
+    hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len 
     classifier = MLPDropout(rng, input=layer1_input, layer_sizes=hidden_units, activations=activations, dropout_rates=dropout_rate)
     
     #define parameters of the model and update functions using adadelta
@@ -242,7 +244,6 @@ def train_conv_net(datasets,
     test_set_y = np.asarray(datasets[1][:,-1],"int32")
     train_set = new_data[:n_train_batches*batch_size,:]
     val_set = new_data[n_train_batches*batch_size:,:]     
-    #train_set_x, train_set_y = shared_dataset((train_set[:,:img_h],train_set[:,-1]))
     train_set_x, train_set_y = shared_dataset((train_set[:,:-1],train_set[:,-1]))
     val_set_x, val_set_y = shared_dataset((val_set[:,:-1],val_set[:,-1]))
     n_val_batches = n_batches - n_train_batches
@@ -267,7 +268,7 @@ def train_conv_net(datasets,
     for conv_layer in conv_layers:
         test_layer0_output = conv_layer.predict(test_layer0_input, test_size)
         test_pred_layers.append(test_layer0_output.flatten(2))
-    #test_pred_layers.append(test_layer1_input_extra_fea)
+    test_pred_layers.append(test_layer1_input_extra_fea)
     test_layer1_input = T.concatenate(test_pred_layers, 1)
     test_y_pred = classifier.predict(test_layer1_input)
     test_y_pred_p = classifier.predict_p(test_layer1_input)
@@ -320,7 +321,12 @@ def train_conv_net(datasets,
             avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
             #for i in range(len(tmp_pred_y)):
             #    print '%d %d %d %s' % (test_set_y[i], tmp_pred_y[i], test_event_id[i], ' '.join([str(val) for val in tmp_feature[i]]))
-        
+            '''
+            tmp_feature = test_layer1_feature(test_set_x)
+            with open("sentence_feature_cv"+str(cv)+".txt", "w") as f:
+                for i in range(len(tmp_feature)):
+                    f.write(str(test_event_id[i])+"\t"+test_mid[i]+"\t"+','.join([str(val) for val in tmp_feature[i]])+"\n")
+            '''
         if val_perf >= best_val_perf:
             best_val_perf = val_perf
             test_loss = test_model_all(test_set_x,test_set_y)        
@@ -418,13 +424,14 @@ def make_idx_data_cv(revs, word_idx_map, cv, max_l=51, k=300, filter_h=5):
     Transforms sentences into a 2-d matrix.
     """
     train, test = [], []
+    test_mid = []
     test_event_id = []
     for rev in revs:
         sent = get_idx_from_sent(rev["text"], word_idx_map, max_l, k, filter_h)   
         # add extra feature to sent fea, word_index(max_l) + extra_fea + y
         extra_fea = [int(val) for val in rev["extra_fea"].split(",")]
         sent += extra_fea
-         
+        mid = rev["mid"]
         # if the sententce if larger than max_l, then use the (0, max_l)
         #if len(sent) > max_l:
         #    sent = sent[:max_l]
@@ -432,13 +439,14 @@ def make_idx_data_cv(revs, word_idx_map, cv, max_l=51, k=300, filter_h=5):
         if rev["split"]==cv:            
             test.append(sent)
             test_event_id.append(rev["event_id"])
+            test_mid.append(mid)
         else:  
             train.append(sent)   
     train = np.array(train,dtype="int")
     test = np.array(test,dtype="int")
     print 'traing set :\t', len(train)
     print 'testing set :\t', len(test)
-    return [train, test], test_event_id
+    return [train, test], test_event_id, test_mid
   
    
 if __name__=="__main__":
@@ -469,14 +477,16 @@ if __name__=="__main__":
     r = range(0,cv)    
     start_time = time.time()
     for i in r:
-        datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
+        datasets, test_event_id, test_mid = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
         #datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
         perf, fp, avg_precsion = train_conv_net(datasets,
                               test_event_id,
+                              test_mid,
+                              i,
                               U,
                               lr_decay=0.95,
-                              #filter_hs=[7,8,9],
-                              filter_hs=[3,4,5],
+                              filter_hs=[7,8,9],
+                              #filter_hs=[3,4,5],
                               conv_non_linear="relu",
                               hidden_units=[100,2], 
                               shuffle_batch=True, 
