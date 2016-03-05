@@ -139,17 +139,22 @@ def cal_measure_info(event_label, event_pred):
     sys.stdout.flush()
     return avg_prec
 
-def save_param(model_file, params):
-    write_file = open(model_file, "wb")
-    model_params = {}
-    model_params["clf"] = params[0]
+def load_param(model_file):
+    f = open(model_file, "rb")
+    clf_param = pk.load(f)
+    conv1_param = pk.load(f)
+    conv2_param = pk.load(f)
+    conv3_param = pk.load(f)
+
+    return clf_param, [conv1_param, conv2_param, conv3_param]
 
 
-def train_conv_net(datasets,
+def conv_net_predict(datasets,
                    test_event_id,
                    test_mid,
                    test_context,
                    cv,
+                   flag,
                    U,
                    idx_word_map,
                    img_w=300,
@@ -194,6 +199,14 @@ def train_conv_net(datasets,
                     ,("sqr_norm_lim",sqr_norm_lim),("shuffle_batch",shuffle_batch)]
     print parameters
 
+    # load param
+    param_file = ''
+    if flag:
+        param_file = "cnn_param_extra_"+str(cv)+".pk"
+    else:
+        param_file = "cnn_param_"+str(cv)+".pk"
+
+    clf_param, conv_param = load_param(param_file)
     #define model architecture
     index = T.lscalar()
     x = T.matrix('x')
@@ -212,62 +225,23 @@ def train_conv_net(datasets,
     for i in xrange(len(filter_hs)):
         filter_shape = filter_shapes[i]
         pool_size = pool_sizes[i]
-        conv_layer = LeNetConvPoolLayer(rng, input=layer0_input,image_shape=(batch_size, 1, img_h, img_w),
+        conv_layer = LeNetConvPoolLayerLoadParam(rng, input=layer0_input,param_w=conv_param[i][0], param_b=conv_param[i][1], image_shape=(batch_size, 1, img_h, img_w),
                                 filter_shape=filter_shape, poolsize=pool_size, non_linear=conv_non_linear)
         layer1_input = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
         layer1_inputs.append(layer1_input)
     layer1_inputs.append(layer1_input_extra_fea)
     layer1_input = T.concatenate(layer1_inputs,1)
-    hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len
-    classifier = MLPDropout(rng, input=layer1_input, layer_sizes=hidden_units, activations=activations, dropout_rates=dropout_rate)
+    if flag:
+        hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len
+    else :
+        hidden_units[0] = feature_maps*len(filter_hs)
+    #classifier = MLPDropoutLoadParam(rng, input=layer1_input, clf_param[0], clf_param[1], layer_sizes=hidden_units, activations=activations, dropout_rates=dropout_rate)
+    classifier = LogisticRegression(input=layer1_input, n_in=hidden_units[0], n_out=hidden_units[1], W=clf_param[0], b=clf_param[1])
 
-    #define parameters of the model and update functions using adadelta
-    params = classifier.params
-    for conv_layer in conv_layers:
-        params += conv_layer.params
-    if non_static:
-        #if word vectors are allowed to change, add them as model parameters
-        params += [Words]
-    cost = classifier.negative_log_likelihood(y)
-    dropout_cost = classifier.dropout_negative_log_likelihood(y)
-    grad_updates = sgd_updates_adadelta(params, dropout_cost, lr_decay, 1e-6, sqr_norm_lim)
-
-    #shuffle dataset and assign to mini batches. if dataset size is not a multiple of mini batches, replicate
-    #extra data (at random), 每次只取0.9倍的数据进行train， shuffle，另外的validation
-    np.random.seed(3435)
-    if datasets[0].shape[0] % batch_size > 0:
-        extra_data_num = batch_size - datasets[0].shape[0] % batch_size
-        train_set = np.random.permutation(datasets[0])
-        extra_data = train_set[:extra_data_num]
-        new_data=np.append(datasets[0],extra_data,axis=0)
-    else:
-        new_data = datasets[0]
-    new_data = np.random.permutation(new_data)
-    n_batches = new_data.shape[0]/batch_size
-    n_train_batches = int(np.round(n_batches*0.9))
-    #divide train set into train/val sets
+    # test data for predict
     test_set_x = datasets[1][:,:-1]
     test_set_y = np.asarray(datasets[1][:,-1],"int32")
-    train_set = new_data[:n_train_batches*batch_size,:]
-    val_set = new_data[n_train_batches*batch_size:,:]
-    train_set_x, train_set_y = shared_dataset((train_set[:,:-1],train_set[:,-1]))
-    val_set_x, val_set_y = shared_dataset((val_set[:,:-1],val_set[:,-1]))
-    n_val_batches = n_batches - n_train_batches
-    val_model = theano.function([index], classifier.errors(y),
-         givens={
-            x: val_set_x[index * batch_size: (index + 1) * batch_size],
-            y: val_set_y[index * batch_size: (index + 1) * batch_size]}, allow_input_downcast=True)
-
-    #compile theano functions to get train/val/test errors
-    test_model = theano.function([index], classifier.errors(y),
-             givens={
-                x: train_set_x[index * batch_size: (index + 1) * batch_size],
-                y: train_set_y[index * batch_size: (index + 1) * batch_size]}, allow_input_downcast=True)
-    train_model = theano.function([index], cost, updates=grad_updates,
-          givens={
-            x: train_set_x[index*batch_size:(index+1)*batch_size],
-            y: train_set_y[index*batch_size:(index+1)*batch_size]}, allow_input_downcast=True)
     test_pred_layers = []
     test_size = test_set_x.shape[0]
     test_layer0_input = Words[T.cast(x[:, :img_h].flatten(),dtype="int32")].reshape((test_size,1,img_h,Words.shape[1]))
@@ -281,10 +255,15 @@ def train_conv_net(datasets,
         test_pred_layers.append(test_layer0_output.flatten(2))
         test_conv_data.append(test_layer0_convs.flatten(3))
     # conv data
-    test_pred_layers.append(test_layer1_input_extra_fea)
+    #all_conv_data = T.concatenate(test_conv_data, 1)
+    if flag:
+        test_pred_layers.append(test_layer1_input_extra_fea)
+
     test_layer1_input = T.concatenate(test_pred_layers, 1)
+
     test_y_pred = classifier.predict(test_layer1_input)
     test_y_pred_p = classifier.predict_p(test_layer1_input)
+
     test_error = T.mean(T.neq(test_y_pred, y))
     test_model_all = theano.function([x,y], test_error, allow_input_downcast=True)
     test_model_f1 = theano.function([x], test_y_pred, allow_input_downcast=True)
@@ -293,171 +272,45 @@ def train_conv_net(datasets,
     test_extra_fea = theano.function([x], test_layer1_input_extra_fea, allow_input_downcast=True)
     get_all_conv_data = theano.function([x], test_conv_data, allow_input_downcast=True)
     #start training over mini-batches
-    print '... training'
-    epoch = 0
-    best_val_perf = 0
-    val_perf = 0
+    print '... predict'
     test_perf = 0
-    cost_epoch = 0
     fp = 0
     avg_precsion = 0
-    param_file = "cnn_param_extra_"+str(cv)+".pk"
-    while (epoch < n_epochs):
-        start_time = time.time()
-        epoch = epoch + 1
-        if shuffle_batch:
-            for minibatch_index in np.random.permutation(range(n_train_batches)):
-                cost_epoch = train_model(minibatch_index)
-                set_zero(zero_vec)
-        else:
-            for minibatch_index in xrange(n_train_batches):
-                cost_epoch = train_model(minibatch_index)
-                set_zero(zero_vec)
-        train_losses = [test_model(i) for i in xrange(n_train_batches)]
-        train_perf = 1 - np.mean(train_losses)
-        val_losses = [val_model(i) for i in xrange(n_val_batches)]
-        val_perf = 1- np.mean(val_losses)
-        print('epoch: %i, training time: %.2f secs, train perf: %.2f %%, val perf: %.2f %%' % (epoch, time.time()-start_time, train_perf * 100., val_perf*100.))
-        test_loss = test_model_all(test_set_x,test_set_y)
-        print 'cur precision: ', 1- test_loss
-        '''
-        tmp_all_test_conv_data = get_all_conv_data(test_set_x)
-            # tmp_test_conv_data: instance_cnt * feature_maps * conv_feature
-        filter_num = len(filter_hs)
+    start_time = time.time()
+    tmp_pred_prob = test_model_prob(test_set_x)
+    test_loss = test_model_all(test_set_x,test_set_y)
+    fp = 1- test_loss
+    print 'last : ', fp
+    avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
 
-        for i in range(tmp_all_test_conv_data[0].shape[0]):
-            print test_context[i].encode("utf8", 'ignore')
-            # i : each instance
-            for i_filter in range(filter_num):
-                max_index_map = {}
-                conv_features = tmp_all_test_conv_data[i_filter][i]
-                max_val, max_index = -100, 0
-                for fea_map_num in range(len(conv_features)):
-                    for k, val in enumerate(conv_features[fea_map_num]):
-                        if val > max_val:
-                            max_val = val
-                            max_index = k
-                    max_index_map.setdefault(max_index, 0)
-                    max_index_map[max_index] += 1
-                dic = sorted(max_index_map.iteritems(), key=lambda d:d[1], reverse = True)
-                max_index, max_val = dic[0]
-                keyphrase = []
-                for num in range(filter_hs[i_filter]):
-                    keyphrase.append(max_index+num)
-                print max_index, dic
-            #print test_set_x[i][keyphrase]
-                print ' '.join([idx_word_map[index].encode("utf8", 'ignore') for index in test_set_x[i][keyphrase]])
-        '''
-        #tmp_pred_prob = test_model_prob(test_set_x)
-        #cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
-        #tmp_feature = test_layer1_feature(test_set_x)
-        #cal_f1(tmp_pred_y, test_set_y)
-        if epoch == n_epochs:
-            #tmp_pred_y = test_model_f1(test_set_x)
-            tmp_pred_prob = test_model_prob(test_set_x)
-            test_loss = test_model_all(test_set_x,test_set_y)
-            fp = 1- test_loss
-            print 'last : ', fp
-            #cal_f1(tmp_pred_y, test_set_y)
-            #if tmp_perf > test_perf:
-            #avg_precsion1 = cal_event_mersure(test_set_y, tmp_pred_y, test_event_id)
-            avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
-            #for i in range(len(tmp_pred_y)):
-            #    print '%d %d %d %s' % (test_set_y[i], tmp_pred_y[i], test_event_id[i], ' '.join([str(val) for val in tmp_feature[i]]))
-            '''
-            tmp_feature = test_layer1_feature(test_set_x)
-            with open("sentence_feature_cv"+str(cv)+".txt", "w") as f:
-                for i in range(len(tmp_feature)):
-                    f.write(str(test_event_id[i])+"\t"+test_mid[i]+"\t"+','.join([str(val) for val in tmp_feature[i]])+"\n")
-            '''
-            '''
-            tmp_all_test_conv_data = get_all_conv_data(test_set_x)
-            # tmp_test_conv_data: instance_cnt * feature_maps * conv_feature
-            filter_num = len(filter_hs)
-            for i in range(tmp_all_test_conv_data[0].shape[0]):
-                print str(tmp_pred_prob[i])+ "\t" + test_context[i].encode("utf8", 'ignore')
-                # i : each instance
-                for i_filter in range(filter_num):
-                    max_index_map = {}
-                    conv_features = tmp_all_test_conv_data[i_filter][i]
-                    max_val, max_index = -100, 0
-                    for fea_map_num in range(len(conv_features)):
-                        for k, val in enumerate(conv_features[fea_map_num]):
-                            if val > max_val:
-                                max_val = val
-                                max_index = k
-                        max_index_map.setdefault(max_index, 0)
-                        max_index_map[max_index] += 1
-                    dic = sorted(max_index_map.iteritems(), key=lambda d:d[1], reverse = True)
-                    max_index, max_val = dic[0]
-                    keyphrase = []
-                    for num in range(filter_hs[i_filter]):
-                        keyphrase.append(max_index+num)
-                    print max_index, dic
-                    print ' '.join([idx_word_map[index].encode("utf8", 'ignore') for index in test_set_x[i][keyphrase]])
-            '''
-        if val_perf >= best_val_perf:
-            best_val_perf = val_perf
-            test_loss = test_model_all(test_set_x,test_set_y)
-            test_perf = 1- test_loss
-            # save params
-            write_file = open(param_file, 'wb')
-            pk.dump(classifier.params, write_file, -1)
-            for conv_layer in conv_layers:
-                pk.dump(conv_layer.params, write_file, -1)
-            write_file.close()
-
+    f_keywords = open("event_keywords_"+str(flag)+"_"+str(cv)+".txt", "w")
+    tmp_all_test_conv_data = get_all_conv_data(test_set_x)
+    # tmp_test_conv_data: instance_cnt * feature_maps * conv_feature
+    filter_num = len(filter_hs)
+    for i in range(tmp_all_test_conv_data[0].shape[0]):
+        f_keywords.write(str(test_event_id[i])+"\t"+str(tmp_pred_prob[i][1])+ "\t" + test_context[i].encode("utf8", 'ignore')+"\n")
+        # i : each instance
+        for i_filter in range(filter_num):
+            max_index_map = {}
+            conv_features = tmp_all_test_conv_data[i_filter][i]
+            max_val, max_index = -100, 0
+            for fea_map_num in range(len(conv_features)):
+                for k, val in enumerate(conv_features[fea_map_num]):
+                    if val > max_val:
+                        max_val = val
+                        max_index = k
+                max_index_map.setdefault(max_index, 0)
+                max_index_map[max_index] += 1
+            dic = sorted(max_index_map.iteritems(), key=lambda d:d[1], reverse = True)
+            max_index, max_val = dic[0]
+            keyphrase = []
+            for num in range(filter_hs[i_filter]):
+                keyphrase.append(max_index+num)
+            f_keywords.write("%d\t%s"%(max_index, str(dic))+"\n")
+            f_keywords.write(' '.join([idx_word_map[index].encode("utf8", 'ignore') for index in test_set_x[i][keyphrase]])+"\n")
+    f_keywords.close()
     return test_perf, fp, avg_precsion
 
-def shared_dataset(data_xy, borrow=True):
-        """ Function that loads the dataset into shared variables
-
-        The reason we store our dataset in shared variables is to allow
-        Theano to copy it into the GPU memory (when code is run on GPU).
-        Since copying data into the GPU is slow, copying a minibatch everytime
-        is needed (the default behaviour if the data is not in a shared
-        variable) would lead to a large decrease in performance.
-        """
-        data_x, data_y = data_xy
-        shared_x = theano.shared(np.asarray(data_x,
-                                               dtype=theano.config.floatX),
-                                 borrow=borrow)
-        shared_y = theano.shared(np.asarray(data_y,
-                                               dtype=theano.config.floatX),
-                                 borrow=borrow)
-        return shared_x, T.cast(shared_y, 'int32')
-
-def sgd_updates_adadelta(params,cost,rho=0.95,epsilon=1e-6,norm_lim=9,word_vec_name='Words'):
-    """
-    adadelta update rule, mostly from
-    https://groups.google.com/forum/#!topic/pylearn-dev/3QbKtCumAW4 (for Adadelta)
-    """
-    updates = OrderedDict({})
-    exp_sqr_grads = OrderedDict({})
-    exp_sqr_ups = OrderedDict({})
-    gparams = []
-    for param in params:
-        empty = np.zeros_like(param.get_value())
-        exp_sqr_grads[param] = theano.shared(value=as_floatX(empty),name="exp_grad_%s" % param.name)
-        gp = T.grad(cost, param)
-        exp_sqr_ups[param] = theano.shared(value=as_floatX(empty), name="exp_grad_%s" % param.name)
-        gparams.append(gp)
-    for param, gp in zip(params, gparams):
-        exp_sg = exp_sqr_grads[param]
-        exp_su = exp_sqr_ups[param]
-        up_exp_sg = rho * exp_sg + (1 - rho) * T.sqr(gp)
-        updates[exp_sg] = up_exp_sg
-        step =  -(T.sqrt(exp_su + epsilon) / T.sqrt(up_exp_sg + epsilon)) * gp
-        updates[exp_su] = rho * exp_su + (1 - rho) * T.sqr(step)
-        stepped_param = param + step
-        if (param.get_value(borrow=True).ndim == 2) and (param.name!='Words'):
-            col_norms = T.sqrt(T.sum(T.sqr(stepped_param), axis=0))
-            desired_norms = T.clip(col_norms, 0, T.sqrt(norm_lim))
-            scale = desired_norms / (1e-7 + col_norms)
-            updates[param] = stepped_param * scale
-        else:
-            updates[param] = stepped_param
-    return updates
 
 def as_floatX(variable):
     if isinstance(variable, float):
@@ -467,15 +320,6 @@ def as_floatX(variable):
         return np.cast[theano.config.floatX](variable)
     return theano.tensor.cast(variable, theano.config.floatX)
 
-def safe_update(dict_to, dict_from):
-    """
-    re-make update dictionary for safe updating
-    """
-    for key, val in dict(dict_from).iteritems():
-        if key in dict_to:
-            raise KeyError(key)
-        dict_to[key] = val
-    return dict_to
 
 def get_idx_from_sent(sent, word_idx_map, max_l=51, k=300, filter_h=5):
     """
@@ -531,6 +375,7 @@ if __name__=="__main__":
     mode= sys.argv[1]
     word_vectors = sys.argv[2]
     cv = int(sys.argv[3])
+    flag = int(sys.argv[4])
     x = pk.load(open("mr.p"+str(cv),"rb"))
     revs, W, W2, word_idx_map, vocab, idx_word_map = x[0], x[1], x[2], x[3], x[4], x[5]
     print "data loaded!"
@@ -556,11 +401,12 @@ if __name__=="__main__":
     for i in r:
         datasets, test_event_id, test_mid, test_context = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
         #datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
-        perf, fp, avg_precsion = train_conv_net(datasets,
+        perf, fp, avg_precsion = conv_net_predict(datasets,
                               test_event_id,
                               test_mid,
                               test_context,
                               i,
+                              flag,
                               U,
                               idx_word_map,
                               lr_decay=0.95,

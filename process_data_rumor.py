@@ -207,7 +207,14 @@ if __name__=="__main__":
     rand_vecs = {}
     add_unknown_words(rand_vecs, vocab)
     W2, _ = get_W(rand_vecs)
-    cPickle.dump([revs, W, W2, word_idx_map, vocab], open(pkfile, "wb"))
+    # get idx to word map
+    idx_word_map = {}
+    for word, index in word_idx_map.items():
+        if index in idx_word_map:
+            print 'duplicates...'
+        idx_word_map[index] = word
+    idx_word_map[0] = 'NULL'
+    cPickle.dump([revs, W, W2, word_idx_map, vocab, idx_word_map], open(pkfile, "wb"))
     print "dataset created!"
     #'''
 
