@@ -1,9 +1,11 @@
 
 
 CNN framework for rumor detection
-
 ===
+
 workflow:
+===
+
 Text->(word embedding through word2vec)-> convolution -> max pooling -> sentence feature + extra feature layer -> softmax 
 
 1. word embedding : use word2vec for training, weibo data filter length by 10, 5kw weibo
@@ -12,4 +14,9 @@ Text->(word embedding through word2vec)-> convolution -> max pooling -> sentence
 3. feature combination: 300 sentence level feature + sentiment and word entitiy faeture
 
 
+Tricks
 ===
+1. min-batch for training, and each epoch use only 90% data for trianing
+2. shuffle batch
+3. weight initialize
+4. adadelta for update weight
