@@ -1,8 +1,15 @@
 
-1. event data
 
-原始数据的文件夹为输入数据
-RumorExperiment: ProcessData.java 生成json文件
-TextParser：RumorDataProcess.java 生成带words的json文件
+CNN framework for rumor detection
+
+===
+workflow:
+Text->(word embedding through word2vec)-> convolution -> max pooling -> sentence feature + extra feature layer -> softmax 
+
+1. word embedding : use word2vec for training, weibo data filter length by 10, 5kw weibo
+2. conv-net: use multiple filter size, each filter can get one feature through max-pooling 
+   keyphrase extraction: for each filter size, get the most selected phrase
+3. feature combination: 300 sentence level feature + sentiment and word entitiy faeture
 
 
+===
