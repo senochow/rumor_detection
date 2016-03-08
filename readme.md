@@ -14,9 +14,19 @@ Text->(word embedding through word2vec)-> convolution -> max pooling -> sentence
 3. feature combination: 300 sentence level feature + sentiment and word entitiy faeture
 
 
+code structure
+===
+1. process_data_rumor.py
+ - input: word2vec file (pre trained on large scale data set), pkfile, nfold
+ - data_folder: weibo messages by split words
+ - extra_fea: selected feature by IG, mid, feature
+
+
+
 Tricks
 ===
 1. min-batch for training, and each epoch use only 90% data for trianing
 2. shuffle batch
 3. weight initialize
 4. adadelta for update weight
+5. dropout for hidden layer

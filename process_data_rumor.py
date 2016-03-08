@@ -36,7 +36,7 @@ def load_json_file(filename, extra_fea_file, vocab, label, fold_map):
     with open(filename) as f:
         num = 0
         for line in f:
-            d = json.loads(line.rstrip())   
+            d = json.loads(line.rstrip())
             weibos = d['weibos']
             e_name = d['event_name'].encode('utf8', 'ignore')
             #if label == 1:
@@ -82,14 +82,14 @@ def build_data_cv(data_folder, extra_fea_folder, cv=10, clean_string=True):
     normal_datas = load_json_file(neg_file, extra_fea_folder[1], vocab, 0, fold_map)
     revs = rumor_datas + normal_datas
     return revs, vocab
-    
+
 def get_W(word_vecs, k=300):
     """
     Get word matrix. W[i] is the vector for word indexed by i
     """
     vocab_size = len(word_vecs)
     word_idx_map = dict()
-    W = np.zeros(shape=(vocab_size+1, k), dtype='float32')            
+    W = np.zeros(shape=(vocab_size+1, k), dtype='float32')
     W[0] = np.zeros(k, dtype='float32')
     i = 1
     for word in word_vecs:
@@ -100,7 +100,7 @@ def get_W(word_vecs, k=300):
 
 def load_txt_vec(filename, vocab):
     print len(vocab)
-    
+
     word_vecs = {}
     f = open(filename)
     line = f.readline().rstrip()
@@ -133,60 +133,60 @@ def load_bin_vec(fname, vocab):
                     word = ''.join(word)
                     break
                 if ch != '\n':
-                    word.append(ch)   
+                    word.append(ch)
             if word in vocab:
-               word_vecs[word] = np.fromstring(f.read(binary_len), dtype='float32')  
+               word_vecs[word] = np.fromstring(f.read(binary_len), dtype='float32')
             else:
                 f.read(binary_len)
     return word_vecs
 
 def add_unknown_words(word_vecs, vocab, min_df=1, k=300):
     """
-    For words that occur in at least min_df documents, create a separate word vector.    
+    For words that occur in at least min_df documents, create a separate word vector.
     0.25 is chosen so the unknown vectors have (approximately) same variance as pre-trained ones
     """
     for word in vocab:
         if word not in word_vecs and vocab[word] >= min_df:
-            word_vecs[word] = np.random.uniform(-0.25,0.25,k)  
+            word_vecs[word] = np.random.uniform(-0.25,0.25,k)
 
 def clean_str(string, TREC=False):
     """
     Tokenization/string cleaning for all datasets except for SST.
     Every dataset is lower cased except for TREC
     """
-    string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)     
-    string = re.sub(r"\'s", " \'s", string) 
-    string = re.sub(r"\'ve", " \'ve", string) 
-    string = re.sub(r"n\'t", " n\'t", string) 
-    string = re.sub(r"\'re", " \'re", string) 
-    string = re.sub(r"\'d", " \'d", string) 
-    string = re.sub(r"\'ll", " \'ll", string) 
-    string = re.sub(r",", " , ", string) 
-    string = re.sub(r"!", " ! ", string) 
-    string = re.sub(r"\(", " \( ", string) 
-    string = re.sub(r"\)", " \) ", string) 
-    string = re.sub(r"\?", " \? ", string) 
-    string = re.sub(r"\s{2,}", " ", string)    
+    string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)
+    string = re.sub(r"\'s", " \'s", string)
+    string = re.sub(r"\'ve", " \'ve", string)
+    string = re.sub(r"n\'t", " n\'t", string)
+    string = re.sub(r"\'re", " \'re", string)
+    string = re.sub(r"\'d", " \'d", string)
+    string = re.sub(r"\'ll", " \'ll", string)
+    string = re.sub(r",", " , ", string)
+    string = re.sub(r"!", " ! ", string)
+    string = re.sub(r"\(", " \( ", string)
+    string = re.sub(r"\)", " \) ", string)
+    string = re.sub(r"\?", " \? ", string)
+    string = re.sub(r"\s{2,}", " ", string)
     return string.strip() if TREC else string.strip().lower()
 
 def clean_str_sst(string):
     """
     Tokenization/string cleaning for the SST dataset
     """
-    string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)   
-    string = re.sub(r"\s{2,}", " ", string)    
+    string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)
+    string = re.sub(r"\s{2,}", " ", string)
     return string.strip().lower()
 
 
-if __name__=="__main__":    
-    w2v_file = sys.argv[1]     
+if __name__=="__main__":
+    w2v_file = sys.argv[1]
     pkfile = sys.argv[2]
     nfold = int(sys.argv[3])
     #data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
     data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
     #extra_fea_folder = ["data/weibo_static_feature/rumor.feature", "data/weibo_static_feature/normal.feature"]
     extra_fea_folder = ["data/weibo_static_feature/event_rumor.feature", "data/weibo_static_feature/event_normal.feature"]
-    print "loading data...",        
+    print "loading data...",
     revs, vocab = build_data_cv(data_folder, extra_fea_folder, cv=nfold, clean_string=True)
     #'''
     max_l = np.max(pd.DataFrame(revs)["num_words"])
@@ -198,7 +198,7 @@ if __name__=="__main__":
     print "max sentence length: " + str(max_l)
     print "loading word2vec vectors...",
     print 'mean, max' + str(mean_l) + ' \t' + str(min_l)
-    
+
     w2v = load_txt_vec(w2v_file, vocab)
     print "word2vec loaded!"
     print "num words already in word2vec: " + str(len(w2v))
