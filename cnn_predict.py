@@ -18,6 +18,7 @@ import re
 import warnings
 import sys
 import time
+import ConfigParser
 warnings.filterwarnings("ignore")
 
 #different non-linearities
@@ -150,13 +151,10 @@ def load_param(model_file):
 
 
 def conv_net_predict(datasets,
-                   test_event_id,
-                   test_mid,
-                   test_context,
+                   data_set,
                    cv,
                    flag,
                    U,
-                   idx_word_map,
                    img_w=300,
                    filter_hs=[3,4,5],
                    hidden_units=[100,2],
@@ -170,21 +168,7 @@ def conv_net_predict(datasets,
                    sqr_norm_lim=9,
                    extra_fea_len=6,
                    non_static=True):
-    """
-    datasets: 0 for tarin, 1 for test
-    U: wordvec : {word_index: vector feature}
-    idx_word_map: idx-> word_name
-    Train a simple conv net
-    img_h = sentence length (padded where necessary), 固定的长度：equal to max sentence length in dataset(pre computed)
-    img_w = word vector length (300 for word2vec)
-    filter_hs = filter window sizes , 每一个filter 对于100个 feature map
-    hidden_units = [x,y] x is the number of feature maps (per filter window), and y is the penultimate layer
-    sqr_norm_lim = s^2 in the paper
-    lr_decay = adadelta decay parameter
-    """
-    rng = np.random.RandomState(3435)
-    img_h = len(datasets[0][0])-extra_fea_len-1  # last one is y
-    print "img height ", img_h
+    img_h = len(datasets[0])-extra_fea_len-1  # last one is y
     filter_w = img_w
     feature_maps = hidden_units[0]
     filter_shapes = []
@@ -193,29 +177,20 @@ def conv_net_predict(datasets,
         # filter: conv shape, hidden layer: 就是最后的全连接层
         filter_shapes.append((feature_maps, 1, filter_h, filter_w))
         pool_sizes.append((img_h-filter_h+1, img_w-filter_w+1))
-    parameters = [("image shape",img_h,img_w),("filter shape",filter_shapes), ("hidden_units",hidden_units),
-                  ("dropout", dropout_rate), ("batch_size",batch_size),("non_static", non_static),
-                    ("learn_decay",lr_decay), ("conv_non_linear", conv_non_linear), ("non_static", non_static)
-                    ,("sqr_norm_lim",sqr_norm_lim),("shuffle_batch",shuffle_batch)]
-    print parameters
 
+    rng = np.random.RandomState(3435)
     # load param
-    param_file = ''
+    param_file = 'data/' + data_set
     if flag:
-        param_file = "cnn_param_extra_"+str(cv)+".pk"
+        param_file += "/cnn_param_extra_"+str(cv)+".pk"
     else:
-        param_file = "cnn_param_"+str(cv)+".pk"
+        param_file += "/cnn_param_"+str(cv)+".pk"
 
     clf_param, conv_param = load_param(param_file)
     #define model architecture
-    index = T.lscalar()
     x = T.matrix('x')
     y = T.ivector('y')
     Words = theano.shared(value = U, name = "Words")
-    # ??? set zero
-    zero_vec_tensor = T.vector()
-    zero_vec = np.zeros(img_w)
-    set_zero = theano.function([zero_vec_tensor], updates=[(Words, T.set_subtensor(Words[0,:], zero_vec_tensor))], allow_input_downcast=True)
     # 转成 batch(50)*1*sent_len(134)*k(300)
     layer0_input = Words[T.cast(x[:,:img_h].flatten(),dtype="int32")].reshape((x.shape[0],1,img_h,Words.shape[1]))
     layer1_input_extra_fea = x[:,img_h:]
@@ -230,7 +205,9 @@ def conv_net_predict(datasets,
         layer1_input = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
         layer1_inputs.append(layer1_input)
-    layer1_inputs.append(layer1_input_extra_fea)
+
+    if flag:
+        layer1_inputs.append(layer1_input_extra_fea)
     layer1_input = T.concatenate(layer1_inputs,1)
     if flag:
         hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len
@@ -239,9 +216,14 @@ def conv_net_predict(datasets,
     #classifier = MLPDropoutLoadParam(rng, input=layer1_input, clf_param[0], clf_param[1], layer_sizes=hidden_units, activations=activations, dropout_rates=dropout_rate)
     classifier = LogisticRegression(input=layer1_input, n_in=hidden_units[0], n_out=hidden_units[1], W=clf_param[0], b=clf_param[1])
 
+    return conv_layers, classifier, Words, img_h
+
+def predict_with_cnn_model(test_dataset, conv_layers, classifier, Words, flag, img_h):
+    x = T.matrix('x')
+    y = T.ivector('y')
     # test data for predict
-    test_set_x = datasets[1][:,:-1]
-    test_set_y = np.asarray(datasets[1][:,-1],"int32")
+    test_set_x = test_dataset[:,:-1]
+    test_set_y = np.asarray(test_dataset[:,-1],"int32")
     test_pred_layers = []
     test_size = test_set_x.shape[0]
     test_layer0_input = Words[T.cast(x[:, :img_h].flatten(),dtype="int32")].reshape((test_size,1,img_h,Words.shape[1]))
@@ -255,7 +237,6 @@ def conv_net_predict(datasets,
         test_pred_layers.append(test_layer0_output.flatten(2))
         test_conv_data.append(test_layer0_convs.flatten(3))
     # conv data
-    #all_conv_data = T.concatenate(test_conv_data, 1)
     if flag:
         test_pred_layers.append(test_layer1_input_extra_fea)
 
@@ -264,35 +245,35 @@ def conv_net_predict(datasets,
     test_y_pred = classifier.predict(test_layer1_input)
     test_y_pred_p = classifier.predict_p(test_layer1_input)
 
-    test_error = T.mean(T.neq(test_y_pred, y))
-    test_model_all = theano.function([x,y], test_error, allow_input_downcast=True)
+    #test_error = T.mean(T.neq(test_y_pred, y))
+    test_error_cnt = T.neq(test_y_pred, y)
+    test_model_all = theano.function([x,y], test_error_cnt, allow_input_downcast=True)
     test_model_f1 = theano.function([x], test_y_pred, allow_input_downcast=True)
     test_model_prob = theano.function([x], test_y_pred_p, allow_input_downcast=True)
     test_layer1_feature = theano.function([x], test_layer1_input, allow_input_downcast=True)
     test_extra_fea = theano.function([x], test_layer1_input_extra_fea, allow_input_downcast=True)
     get_all_conv_data = theano.function([x], test_conv_data, allow_input_downcast=True)
-    #start training over mini-batches
     print '... predict'
-    test_perf = 0
-    fp = 0
-    avg_precsion = 0
     start_time = time.time()
     tmp_pred_prob = test_model_prob(test_set_x)
-    test_loss = test_model_all(test_set_x,test_set_y)
-    fp = 1- test_loss
-    print 'last : ', fp
-    avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
-
-    f_keywords = open("event_keywords_"+str(flag)+"_"+str(cv)+".txt", "w")
+    test_error_cnt = test_model_all(test_set_x,test_set_y)
+    #avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
     tmp_all_test_conv_data = get_all_conv_data(test_set_x)
+    return tmp_all_test_conv_data, tmp_pred_prob, test_error_cnt
+
+def write_event_keywords(data_set_id, test_set_x, flag, cv, all_test_conv_data, filter_num, test_event_id, tmp_pred_prob, test_context, idx_word_map):
+    filter_hs = [3,4,5]
+    print "test_context \t",len(test_context)
+    print "prob_context \t",len(tmp_pred_prob)
+    f_keywords = open('data/'+data_set_id+"/event_keywords_"+str(flag)+"_"+str(cv)+".txt", "w")
     # tmp_test_conv_data: instance_cnt * feature_maps * conv_feature
-    filter_num = len(filter_hs)
-    for i in range(tmp_all_test_conv_data[0].shape[0]):
+    for i in range(all_test_conv_data[0].shape[0]):
         f_keywords.write(str(test_event_id[i])+"\t"+str(tmp_pred_prob[i][1])+ "\t" + test_context[i].encode("utf8", 'ignore')+"\n")
+        #f_keywords.write(str(tmp_pred_prob[i][1])+ "\t" + test_context[i].encode("utf8", 'ignore')+"\n")
         # i : each instance
         for i_filter in range(filter_num):
             max_index_map = {}
-            conv_features = tmp_all_test_conv_data[i_filter][i]
+            conv_features = all_test_conv_data[i_filter][i]
             max_val, max_index = -100, 0
             for fea_map_num in range(len(conv_features)):
                 for k, val in enumerate(conv_features[fea_map_num]):
@@ -309,16 +290,7 @@ def conv_net_predict(datasets,
             f_keywords.write("%d\t%s"%(max_index, str(dic))+"\n")
             f_keywords.write(' '.join([idx_word_map[index].encode("utf8", 'ignore') for index in test_set_x[i][keyphrase]])+"\n")
     f_keywords.close()
-    return test_perf, fp, avg_precsion
 
-
-def as_floatX(variable):
-    if isinstance(variable, float):
-        return np.cast[theano.config.floatX](variable)
-
-    if isinstance(variable, np.ndarray):
-        return np.cast[theano.config.floatX](variable)
-    return theano.tensor.cast(variable, theano.config.floatX)
 
 
 def get_idx_from_sent(sent, word_idx_map, max_l=51, k=300, filter_h=5):
@@ -376,8 +348,13 @@ if __name__=="__main__":
     word_vectors = sys.argv[2]
     cv = int(sys.argv[3])
     flag = int(sys.argv[4])
-    x = pk.load(open("mr.p"+str(cv),"rb"))
-    revs, W, W2, word_idx_map, vocab, idx_word_map = x[0], x[1], x[2], x[3], x[4], x[5]
+    data_set = sys.argv[5]
+    conf_file = sys.argv[6]
+    cf = ConfigParser.ConfigParser()
+    cf.read(conf_file)
+    x = pk.load(open(cf.get(data_set, "pkfile"+str(cv)),"rb"))
+    revs, W, W2, word_idx_map, vocab, idx_word_map, max_length = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
+
     print "data loaded!"
 
     if mode=="-nonstatic":
@@ -399,16 +376,14 @@ if __name__=="__main__":
     r = range(0,cv)
     start_time = time.time()
     for i in r:
-        datasets, test_event_id, test_mid, test_context = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
-        #datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
-        perf, fp, avg_precsion = conv_net_predict(datasets,
-                              test_event_id,
-                              test_mid,
-                              test_context,
+        datasets, test_event_id, test_mid, test_context = make_idx_data_cv(revs, word_idx_map, i, max_l=max_length,k=300, filter_h=5)
+        test_set_all = datasets[1]
+        all_conv, all_prob, all_error_cnt = [[],[],[]], [], []
+        conv_layers, classifier, Words, img_h = conv_net_predict(test_set_all,
+                              data_set,
                               i,
                               flag,
                               U,
-                              idx_word_map,
                               lr_decay=0.95,
                               #filter_hs=[7,8,9],
                               filter_hs=[3,4,5],
@@ -420,12 +395,28 @@ if __name__=="__main__":
                               non_static=non_static,
                               batch_size=50,
                               dropout_rate=[0.5])
+        test_batch_cnt = 5000
+        test_batch_size = len(test_set_all)/test_batch_cnt + 1
+        for index in range(test_batch_size):
+            cur_test_data = test_set_all[index*test_batch_cnt: (index+1)*test_batch_cnt]
+            tmp_conv, tmp_prob, tmp_error_cnt = predict_with_cnn_model(cur_test_data, conv_layers, classifier, Words, flag, img_h)
+            for j in range(len(tmp_conv)):
+                all_conv[j].append(tmp_conv[j])
+            all_prob.append(tmp_prob)
+            all_error_cnt.append(tmp_error_cnt)
+        # merge conv data
+        merge_all_conv = [[],[],[]]
+        all_prob = np.concatenate(all_prob)
+        all_error_cnt = np.concatenate(all_error_cnt)
+        print all_prob.shape
+        for k in range(len(all_conv)):
+            merge_all_conv[k] = np.concatenate(all_conv[k])
+        perf = 1-1.0*sum(all_error_cnt)/len(test_set_all)
         print "cv: " + str(i) + ", perf: " + str(perf)
         results.append(perf)
-        fres.append(fp)
-        avg_plist.append(avg_precsion)
+        #avg_plist.append(avg_precsion)
+        write_event_keywords(data_set, test_set_all[:,:-1], flag, i, merge_all_conv, 3, test_event_id, all_prob, test_context, idx_word_map)
         #break
     print 'total time : %.2f minutes' % ((time.time()-start_time)/60)
     print str(np.mean(results))
-    print str(np.mean(fres))
-    print 'all avg precision : prec: %f' % (np.mean(avg_plist))
+    #print 'all avg precision : prec: %f' % (np.mean(avg_plist))

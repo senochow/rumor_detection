@@ -16,12 +16,16 @@ Text->(word embedding through word2vec)-> convolution -> max pooling -> sentence
 
 code structure
 ===
+preprocess: CNNPreprocess.java , extra_feature: WeiboFeature/WeiboFeatureExtrator.java
+
 1. process_data_rumor.py
  - input: word2vec file (pre trained on large scale data set), pkfile, nfold
  - data_folder: weibo messages by split words
  - extra_fea: selected feature by IG, mid, feature
-
-
+ * word not in word2vec, initialize by uniform(-0.25,0.25)
+ * vocabulary: 0 for NULL, and others start from 1 (0 also used for padding null words)
+ * output pkfile: sentenses, word2vec, random_vectors, word->id, vocab, id->word
+ * fist process must get the max_length and set for cnn
 
 Tricks
 ===

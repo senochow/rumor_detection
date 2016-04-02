@@ -7,6 +7,7 @@ from collections import defaultdict
 import sys, re
 import pandas as pd
 from sklearn.cross_validation import KFold
+import ConfigParser
 
 def gen_kfold(nums, cv):
     kf = KFold(nums, n_folds=cv)
@@ -31,7 +32,6 @@ def load_extra_fea(filename):
 def load_json_file(filename, extra_fea_file, vocab, label, fold_map):
     revs = []
     id_extra_fea = load_extra_fea(extra_fea_file)
-    print len(id_extra_fea)
     fea_cnt = 0
     with open(filename) as f:
         num = 0
@@ -51,10 +51,13 @@ def load_json_file(filename, extra_fea_file, vocab, label, fold_map):
                 # words str, connect by space
                 ori_rev = weibo['words']
                 mid = weibo['mid'].encode('utf8', 'ignore')
-                if mid not in id_extra_fea:
+                extra_fea = ''
+                if mid in id_extra_fea:
+                    extra_fea = id_extra_fea[mid]
+                else:
                     fea_cnt += 1
                     continue
-                extra_fea = id_extra_fea[mid]
+                    extra_fea = '0,0,0,0,0,0'
                 cnt = 0
                 #for word in ori_rev.split():
                 for word in ori_rev.split():
@@ -62,24 +65,26 @@ def load_json_file(filename, extra_fea_file, vocab, label, fold_map):
                     vocab[word] += 1
                 event_index = num
                 if label == 0:
-                    event_index += 100
+                    event_index += 1000
                 datum = {"y":label, "mid":mid ,"text": ori_rev, "extra_fea":extra_fea, "num_words": cnt, "split": fold_map[num], "event_id":event_index}
                 revs.append(datum)
             num += 1
-    print fea_cnt
+    print 'mid feature not found ', fea_cnt
     return revs
 
-def build_data_cv(data_folder, extra_fea_folder, cv=10, clean_string=True):
+def build_data_cv(data_folder, extra_fea_folder, rumor_cnt, normal_cnt,cv=10, clean_string=True):
     """
-    Loads data and split into 5 folds.
+    Loads data and split into cv folds.
     """
-    fold_map = gen_kfold(73, cv)
+    fold_map_rumor = gen_kfold(rumor_cnt, cv)
+    fold_map_normal = gen_kfold(normal_cnt, cv)
+
     revs = []
     pos_file = data_folder[0]
     neg_file = data_folder[1]
     vocab = defaultdict(float)
-    rumor_datas = load_json_file(pos_file, extra_fea_folder[0], vocab, 1, fold_map)
-    normal_datas = load_json_file(neg_file, extra_fea_folder[1], vocab, 0, fold_map)
+    rumor_datas = load_json_file(pos_file, extra_fea_folder[0], vocab, 1, fold_map_rumor)
+    normal_datas = load_json_file(neg_file, extra_fea_folder[1], vocab, 0, fold_map_normal)
     revs = rumor_datas + normal_datas
     return revs, vocab
 
@@ -99,7 +104,6 @@ def get_W(word_vecs, k=300):
     return W, word_idx_map
 
 def load_txt_vec(filename, vocab):
-    print len(vocab)
 
     word_vecs = {}
     f = open(filename)
@@ -180,14 +184,20 @@ def clean_str_sst(string):
 
 if __name__=="__main__":
     w2v_file = sys.argv[1]
-    pkfile = sys.argv[2]
-    nfold = int(sys.argv[3])
-    #data_folder = ["data/rumor_events_messages.json","data/normal_events_messages.json"]
-    data_folder = ["data/rumor_events_messages_words.json","data/normal_events_messages_words.json"]
-    #extra_fea_folder = ["data/weibo_static_feature/rumor.feature", "data/weibo_static_feature/normal.feature"]
-    extra_fea_folder = ["data/weibo_static_feature/event_rumor.feature", "data/weibo_static_feature/event_normal.feature"]
+    nfold = int(sys.argv[2])
+    conf_file = sys.argv[3]
+    data_set = sys.argv[4] #which data set to use, 73 or 500
+
+    cf = ConfigParser.ConfigParser()
+    cf.read(conf_file)
+    data_folder = [cf.get(data_set, "rumor_file"),cf.get(data_set, "normal_file")]
+    extra_fea_folder = [cf.get(data_set, "extra_rumor_fea_file"), cf.get(data_set, "extra_normal_fea_file")]
+
+    pkfile = cf.get(data_set, "pkfile"+str(nfold))
+    rumor_cnt = int(cf.get(data_set, "rumor_cnt"))
+    normal_cnt = int(cf.get(data_set, "normal_cnt"))
     print "loading data...",
-    revs, vocab = build_data_cv(data_folder, extra_fea_folder, cv=nfold, clean_string=True)
+    revs, vocab = build_data_cv(data_folder, extra_fea_folder, rumor_cnt, normal_cnt, cv=nfold, clean_string=True)
     #'''
     max_l = np.max(pd.DataFrame(revs)["num_words"])
     mean_l = np.mean(pd.DataFrame(revs)["num_words"])
@@ -214,7 +224,7 @@ if __name__=="__main__":
             print 'duplicates...'
         idx_word_map[index] = word
     idx_word_map[0] = 'NULL'
-    cPickle.dump([revs, W, W2, word_idx_map, vocab, idx_word_map], open(pkfile, "wb"))
+    cPickle.dump([revs, W, W2, word_idx_map, vocab, idx_word_map, max_l], open(pkfile, "wb"))
     print "dataset created!"
     #'''
 

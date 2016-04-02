@@ -16,22 +16,24 @@ w2v_file=${dirname}'weibo_filter_5kw_300.vector'
 #w2v_file=${dirname}'wiki.zh.text.vector'
 #w2v_file=${dirname}'xinhua_sent_filter_300.vector'
 cv=5
-pkfile='mr.p'$cv
 #python process_data_rumor.py $w2v_file $pkfile $cv
 #python process_data_17.py $w2v_file $pkfile $cv
 
 #python conv_net_sentence.py -nonstatic -word2vec $cv
 #python conv_net_sentence.py -static -word2vec $cv
 
+data_set='data_500'
+conf_file='global.conf'
+data_dir='data/'${data_set}
 flag=$1
 
-python cnn_predict.py -static -word2vec $cv $flag
+python cnn_predict.py -static -word2vec $cv $flag $data_set $conf_file
 
 if [ ${flag} -eq '1' ]
 then
-    dirname='event_keywords_extra'
+    dirname=${data_dir}'/event_keywords_extra'
 else
-    dirname='event_keywords_origin'
+    dirname=${data_dir}'/event_keywords_origin'
 fi
 echo $dirname
 
@@ -39,7 +41,7 @@ rm $dirname/*
 
 for((cv=0;cv<5;cv++))
 do
-    event_file='event_keywords_'${flag}'_'${cv}'.txt'
+    event_file=${data_dir}'/event_keywords_'${flag}'_'${cv}'.txt'
     python split_events.py $event_file $dirname
 done
 

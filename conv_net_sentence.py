@@ -18,6 +18,7 @@ import re
 import warnings
 import sys
 import time
+import ConfigParser
 warnings.filterwarnings("ignore")
 
 #different non-linearities
@@ -149,9 +150,11 @@ def train_conv_net(datasets,
                    test_event_id,
                    test_mid,
                    test_context,
+                   data_set_file,
                    cv,
+                   flag,
                    U,
-                   idx_word_map,
+                   #idx_word_map,
                    img_w=300,
                    filter_hs=[3,4,5],
                    hidden_units=[100,2],
@@ -163,7 +166,7 @@ def train_conv_net(datasets,
                    conv_non_linear="relu",
                    activations=[Iden],
                    sqr_norm_lim=9,
-                   extra_fea_len=6,
+                   extra_fea_len=8,
                    non_static=True):
     """
     datasets: 0 for tarin, 1 for test
@@ -217,9 +220,17 @@ def train_conv_net(datasets,
         layer1_input = conv_layer.output.flatten(2)
         conv_layers.append(conv_layer)
         layer1_inputs.append(layer1_input)
-    layer1_inputs.append(layer1_input_extra_fea)
+
+    if flag:
+        layer1_inputs.append(layer1_input_extra_fea)
+
     layer1_input = T.concatenate(layer1_inputs,1)
-    hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len
+
+    if flag:
+        hidden_units[0] = feature_maps*len(filter_hs) + extra_fea_len
+    else:
+        hidden_units[0] = feature_maps*len(filter_hs)
+
     classifier = MLPDropout(rng, input=layer1_input, layer_sizes=hidden_units, activations=activations, dropout_rates=dropout_rate)
 
     #define parameters of the model and update functions using adadelta
@@ -247,12 +258,24 @@ def train_conv_net(datasets,
     n_batches = new_data.shape[0]/batch_size
     n_train_batches = int(np.round(n_batches*0.9))
     #divide train set into train/val sets
-    test_set_x = datasets[1][:,:-1]
-    test_set_y = np.asarray(datasets[1][:,-1],"int32")
+
+    test_size_all = datasets[1].shape[0]
+    n_test_batches = datasets[1].shape[0]/batch_size
+    test_size_batch = n_test_batches*batch_size
+    test_size_remand = datasets[1].shape[0]%batch_size
+
+    # 一部分用batch来预测，一部分不足的用test模型
+    test_set_x = datasets[1][:test_size_batch, :-1]
+    test_set_y = np.asarray(datasets[1][:test_size_batch, -1],"int32")
+    test_set_remand_x = datasets[1][test_size_batch:, :-1]
+    test_set_remand_y = np.asarray(datasets[1][test_size_batch:, -1],"int32")
+    # train & validation
     train_set = new_data[:n_train_batches*batch_size,:]
     val_set = new_data[n_train_batches*batch_size:,:]
     train_set_x, train_set_y = shared_dataset((train_set[:,:-1],train_set[:,-1]))
     val_set_x, val_set_y = shared_dataset((val_set[:,:-1],val_set[:,-1]))
+    #test_set_x_s, test_set_y_s = shared_dataset((datasets[1][:,:-1],np.asarray(datasets[1][:,-1],"int32")))
+    test_set_x_s, test_set_y_s = shared_dataset((test_set_x, test_set_y))
     n_val_batches = n_batches - n_train_batches
     val_model = theano.function([index], classifier.errors(y),
          givens={
@@ -260,6 +283,10 @@ def train_conv_net(datasets,
             y: val_set_y[index * batch_size: (index + 1) * batch_size]}, allow_input_downcast=True)
 
     #compile theano functions to get train/val/test errors
+    test_model_batch = theano.function([index], classifier.errors(y),
+             givens={
+                x: test_set_x_s[index * batch_size: (index + 1) * batch_size],
+                y: test_set_y_s[index * batch_size: (index + 1) * batch_size]}, allow_input_downcast=True)
     test_model = theano.function([index], classifier.errors(y),
              givens={
                 x: train_set_x[index * batch_size: (index + 1) * batch_size],
@@ -269,24 +296,27 @@ def train_conv_net(datasets,
             x: train_set_x[index*batch_size:(index+1)*batch_size],
             y: train_set_y[index*batch_size:(index+1)*batch_size]}, allow_input_downcast=True)
     test_pred_layers = []
-    test_size = test_set_x.shape[0]
-    test_layer0_input = Words[T.cast(x[:, :img_h].flatten(),dtype="int32")].reshape((test_size,1,img_h,Words.shape[1]))
+    #test_size = x.shape[0]
+    test_layer0_input = Words[T.cast(x[:, :img_h].flatten(),dtype="int32")].reshape((test_size_remand,1,img_h,Words.shape[1]))
     test_layer1_input_extra_fea = x[:,img_h:]
 
     # [(instances * feature_maps * conv_feature)], different filter size have different conv dimention
     test_conv_data = []
     for conv_layer in conv_layers:
-        test_layer0_output = conv_layer.predict(test_layer0_input, test_size)
-        test_layer0_convs = conv_layer.predict_maxpool(test_layer0_input, test_size)
+        test_layer0_output = conv_layer.predict(test_layer0_input, test_size_remand)
+        test_layer0_convs = conv_layer.predict_maxpool(test_layer0_input, test_size_remand)
         test_pred_layers.append(test_layer0_output.flatten(2))
         test_conv_data.append(test_layer0_convs.flatten(3))
     # conv data
-    test_pred_layers.append(test_layer1_input_extra_fea)
+    if flag:
+        test_pred_layers.append(test_layer1_input_extra_fea)
+
     test_layer1_input = T.concatenate(test_pred_layers, 1)
     test_y_pred = classifier.predict(test_layer1_input)
     test_y_pred_p = classifier.predict_p(test_layer1_input)
-    test_error = T.mean(T.neq(test_y_pred, y))
-    test_model_all = theano.function([x,y], test_error, allow_input_downcast=True)
+    #test_error = T.mean(T.neq(test_y_pred, y))
+    test_error1 = T.neq(test_y_pred, y)
+    test_model_all = theano.function([x,y], test_error1, allow_input_downcast=True)
     test_model_f1 = theano.function([x], test_y_pred, allow_input_downcast=True)
     test_model_prob = theano.function([x], test_y_pred_p, allow_input_downcast=True)
     test_layer1_feature = theano.function([x], test_layer1_input, allow_input_downcast=True)
@@ -301,7 +331,12 @@ def train_conv_net(datasets,
     cost_epoch = 0
     fp = 0
     avg_precsion = 0
-    param_file = "cnn_param_extra_"+str(cv)+".pk"
+    param_file = 'data/' + data_set_file
+    if flag:
+        param_file += "/cnn_param_extra_"+str(cv)+".pk"
+    else:
+        param_file += "/cnn_param_"+str(cv)+".pk"
+
     while (epoch < n_epochs):
         start_time = time.time()
         epoch = epoch + 1
@@ -318,50 +353,35 @@ def train_conv_net(datasets,
         val_losses = [val_model(i) for i in xrange(n_val_batches)]
         val_perf = 1- np.mean(val_losses)
         print('epoch: %i, training time: %.2f secs, train perf: %.2f %%, val perf: %.2f %%' % (epoch, time.time()-start_time, train_perf * 100., val_perf*100.))
-        test_loss = test_model_all(test_set_x,test_set_y)
-        print 'cur precision: ', 1- test_loss
-        '''
-        tmp_all_test_conv_data = get_all_conv_data(test_set_x)
-            # tmp_test_conv_data: instance_cnt * feature_maps * conv_feature
-        filter_num = len(filter_hs)
+        test_losses = [int(test_model_batch(i)*batch_size) for i in xrange(n_test_batches)]
+        test_loss_remand = test_model_all(test_set_remand_x,test_set_remand_y)
+        neq_all = sum(test_losses) + sum(test_loss_remand)
+        error_all = 1.0*neq_all/test_size_all
+        fp = 1 - error_all
+        #test_perf = 1 - np.mean(test_losses)
+        #print 'test loss previous ', 1- 1.0*sum(test_losses)/(n_test_batches*batch_size)
+        print 'cur test loss: ', fp
 
-        for i in range(tmp_all_test_conv_data[0].shape[0]):
-            print test_context[i].encode("utf8", 'ignore')
-            # i : each instance
-            for i_filter in range(filter_num):
-                max_index_map = {}
-                conv_features = tmp_all_test_conv_data[i_filter][i]
-                max_val, max_index = -100, 0
-                for fea_map_num in range(len(conv_features)):
-                    for k, val in enumerate(conv_features[fea_map_num]):
-                        if val > max_val:
-                            max_val = val
-                            max_index = k
-                    max_index_map.setdefault(max_index, 0)
-                    max_index_map[max_index] += 1
-                dic = sorted(max_index_map.iteritems(), key=lambda d:d[1], reverse = True)
-                max_index, max_val = dic[0]
-                keyphrase = []
-                for num in range(filter_hs[i_filter]):
-                    keyphrase.append(max_index+num)
-                print max_index, dic
-            #print test_set_x[i][keyphrase]
-                print ' '.join([idx_word_map[index].encode("utf8", 'ignore') for index in test_set_x[i][keyphrase]])
-        '''
+        #test_loss = test_model_all(test_set_x,test_set_y)
+        #print 'cur precision: ', 1- test_loss
         #tmp_pred_prob = test_model_prob(test_set_x)
         #cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
         #tmp_feature = test_layer1_feature(test_set_x)
         #cal_f1(tmp_pred_y, test_set_y)
-        if epoch == n_epochs:
+        if epoch == n_epochs+1:
             #tmp_pred_y = test_model_f1(test_set_x)
-            tmp_pred_prob = test_model_prob(test_set_x)
-            test_loss = test_model_all(test_set_x,test_set_y)
-            fp = 1- test_loss
+            #tmp_pred_prob = test_model_prob(test_set_x)
+            test_losses = [test_model_batch(i) for i in xrange(n_test_batches)]
+            test_perf = 1 - np.mean(test_losses)
+
+            #test_loss = test_model_all(test_set_x,test_set_y)
+
+            fp = test_perf
             print 'last : ', fp
             #cal_f1(tmp_pred_y, test_set_y)
             #if tmp_perf > test_perf:
             #avg_precsion1 = cal_event_mersure(test_set_y, tmp_pred_y, test_event_id)
-            avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
+            #avg_precsion = cal_event_prob(test_set_y, tmp_pred_prob, test_event_id)
             #for i in range(len(tmp_pred_y)):
             #    print '%d %d %d %s' % (test_set_y[i], tmp_pred_y[i], test_event_id[i], ' '.join([str(val) for val in tmp_feature[i]]))
             '''
@@ -398,8 +418,9 @@ def train_conv_net(datasets,
             '''
         if val_perf >= best_val_perf:
             best_val_perf = val_perf
-            test_loss = test_model_all(test_set_x,test_set_y)
-            test_perf = 1- test_loss
+            #test_loss = test_model_all(test_set_x,test_set_y)
+            #test_perf = 1- test_loss
+            test_perf = fp
             # save params
             write_file = open(param_file, 'wb')
             pk.dump(classifier.params, write_file, -1)
@@ -531,8 +552,16 @@ if __name__=="__main__":
     mode= sys.argv[1]
     word_vectors = sys.argv[2]
     cv = int(sys.argv[3])
-    x = pk.load(open("mr.p"+str(cv),"rb"))
-    revs, W, W2, word_idx_map, vocab, idx_word_map = x[0], x[1], x[2], x[3], x[4], x[5]
+    data_set = sys.argv[4]
+    conf_file = sys.argv[5]
+    flag = int(sys.argv[6])
+
+    cf = ConfigParser.ConfigParser()
+    cf.read(conf_file)
+
+    x = pk.load(open(cf.get(data_set, "pkfile"+str(cv)),"rb"))
+    #revs, W, W2, word_idx_map, vocab, idx_word_map, max_length = x[0], x[1], x[2], x[3], x[4], x[5], x[6]
+    revs, W, W2, word_idx_map, max_length = x[0], x[1], x[2], x[3],x[6]# x[4], x[5], x[6]
     print "data loaded!"
 
     if mode=="-nonstatic":
@@ -552,19 +581,22 @@ if __name__=="__main__":
     fres = []
     avg_plist = []
     r = range(0,cv)
+    extra_fea = 6
     start_time = time.time()
     for i in r:
-        datasets, test_event_id, test_mid, test_context = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=5)
+        datasets, test_event_id, test_mid, test_context = make_idx_data_cv(revs, word_idx_map, i, max_l=max_length ,k=300, filter_h=5)
         #datasets, test_event_id = make_idx_data_cv(revs, word_idx_map, i, max_l=133,k=300, filter_h=9)
         perf, fp, avg_precsion = train_conv_net(datasets,
                               test_event_id,
                               test_mid,
                               test_context,
+                              data_set,
                               i,
+                              flag,
                               U,
-                              idx_word_map,
+                              #idx_word_map,
                               lr_decay=0.95,
-                              #filter_hs=[7,8,9],
+                              #filter_hs=[5,6,7],
                               filter_hs=[3,4,5],
                               conv_non_linear="relu",
                               hidden_units=[100,2],
@@ -573,6 +605,7 @@ if __name__=="__main__":
                               sqr_norm_lim=9,
                               non_static=non_static,
                               batch_size=50,
+                              extra_fea_len=extra_fea,
                               dropout_rate=[0.5])
         print "cv: " + str(i) + ", perf: " + str(perf)
         results.append(perf)
